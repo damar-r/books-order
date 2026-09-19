@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Admin - Update Skema Incentive</title>
+<link rel="stylesheet" href="css/style.css">
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <h1>🛠️ Admin — Update Skema Incentive</h1>
+    <p>Upload file Excel skema incentive mingguan (format sheet "Incentive Schema", "Threshold", "Target Agent"), lalu download <code>schema.json</code> hasilnya untuk di-upload ke folder <code>data/</code> di repo GitHub.</p>
+    <div class="nav-links"><a href="index.html">← Kembali ke Kalkulator Agent</a></div>
+  </header>
+
+  <div id="alertArea"></div>
+
+  <div class="card">
+    <h2>1. Upload File Excel</h2>
+    <div class="field">
+      <label for="fileInput">File skema (.xlsx)</label>
+      <input type="file" id="fileInput" accept=".xlsx,.xls">
+      <div class="hint">Sheet wajib: <b>Incentive Schema</b> (kolom Week, STATUS, TEAM, PRODUCT, TH 0..TH n). Opsional: <b>Threshold</b> dan <b>Target Agent</b>.</div>
+    </div>
+    <div class="field">
+      <label for="statusFilterInput">Filter kolom STATUS (kosongkan jika tidak perlu filter)</label>
+      <input type="text" id="statusFilterInput" value="Agent">
+      <div class="hint">Hanya baris dengan STATUS ini yang dipakai. Default "Agent".</div>
+    </div>
+  </div>
+
+  <div class="card" id="mergeCard" style="display:none;">
+    <h2>2. Gabung dengan schema.json yang sudah ada? (opsional)</h2>
+    <div class="field">
+      <label for="existingSchemaInput">Upload schema.json lama untuk digabung (minggu baru ditambahkan, minggu lama tetap tersimpan)</label>
+      <input type="file" id="existingSchemaInput" accept=".json">
+      <div class="hint">Kalau dilewati, hasil download hanya berisi minggu dari file Excel yang baru diupload (minggu lama akan hilang kalau langsung menimpa data/schema.json).</div>
+    </div>
+  </div>
+
+  <div class="card" id="previewCard" style="display:none;">
+    <h2>3. Preview</h2>
+    <div id="previewContent"></div>
+  </div>
+
+  <div class="card" id="downloadCard" style="display:none;">
+    <h2>4. Download &amp; Upload ke GitHub</h2>
+    <button class="btn-primary" id="downloadBtn">⬇️ Download schema.json</button>
+    <p class="hint" style="margin-top:10px;">
+      Setelah download: buka repo GitHub di browser → masuk folder <code>data/</code> → klik "Add file" → "Upload files" →
+      pilih file <code>schema.json</code> yang baru di-download ini → pastikan nama file tetap <code>schema.json</code> (menimpa yang lama) → commit.
+      GitHub Pages otomatis update dalam ~1 menit.
+    </p>
+  </div>
+</div>
+
+<script src="js/parse.js"></script>
+<script>
+let generatedSchema = null;
+let existingSchema = null;
+
+const fileInput = document.getElementById('fileInput');
+const existingSchemaInput = document.getElementById('existingSchemaInput');
+const statusFilterInput = document.getElementById('statusFilterInput');
+
+fileInput.addEventListener('change', handleFile);
+existingSchemaInput.addEventListener('change', handleExistingSchema);
+document.getElementById('downloadBtn').addEventListener('click', downloadSchema);
+
+function showAlert(msg, type = 'error') {
+  document.getElementById('alertArea').innerHTML = `<div class="alert ${type}">${msg}</div>`;
+}
+function clearAlert() {
+  document.getElementById('alertArea').innerHTML = '';
+}
+
+async function handleFile(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  clearAlert();
+  try {
+    const buf = await file.arrayBuffer();
+    const workbook = XLSX.read(buf, { type: 'array' });
+    const statusFilter = statusFilterInput.value.trim() || null;
+    let schema = buildSchemaFromWorkbook(workbook, { statusFilter });
+
+    if (existingSchema) {
+      schema = mergeSchemas(existingSchema, schema);
+    }
+
+    generatedSchema = schema;
+    document.getElementById('mergeCard').style.display = 'block';
+    renderPreview(schema);
+    document.getElementById('previewCard').style.display = 'block';
+    document.getElementById('downloadCard').style.display = 'block';
+  } catch (err) {
+    showAlert('Gagal memproses file: ' + err.message);
+    console.error(err);
+  }
+}
+
+async function handleExistingSchema(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  try {
+    const text = await file.text();
+    existingSchema = JSON.parse(text);
+    showAlert('schema.json lama berhasil dimuat. Upload ulang file Excel di atas untuk menggabungkannya.', 'info');
+    // reset file excel supaya re-trigger merge kalau sudah pernah upload
+    if (fileInput.files[0]) {
+      handleFile({ target: fileInput });
+    }
+  } catch (err) {
+    showAlert('Gagal membaca schema.json lama: ' + err.message);
+  }
+}
+
+function mergeSchemas(oldSchema, newSchema) {
+  const merged = { generatedAt: newSchema.generatedAt, weeks: { ...(oldSchema.weeks || {}) } };
+  for (const [week, data] of Object.entries(newSchema.weeks)) {
+    merged.weeks[week] = data; // minggu baru menimpa minggu yang sama di data lama
+  }
+  return merged;
+}
+
+function renderPreview(schema) {
+  const weeks = Object.keys(schema.weeks).sort((a, b) => Number(a) - Number(b));
+  let html = `<p class="muted">Ditemukan ${weeks.length} minggu: ${weeks.join(', ')}</p>`;
+
+  for (const week of weeks) {
+    const teams = schema.weeks[week].teams;
+    for (const [team, teamData] of Object.entries(teams)) {
+      const products = Object.keys(teamData.products);
+      const thKeys = teamData.thresholds.map((t) => t.key);
+      html += `<h3 style="font-size:14px;margin:16px 0 6px;">Week ${week} — ${team} <span class="badge">${products.length} produk</span></h3>`;
+      if (teamData.defaultTarget) {
+        html += `<p class="muted">Default target: Rp ${Math.round(teamData.defaultTarget).toLocaleString('id-ID')}</p>`;
+      }
+      html += `<table class="preview"><thead><tr><th>Produk</th>${thKeys.map((k) => `<th>${k}</th>`).join('')}</tr></thead><tbody>`;
+      for (const p of products) {
+        html += `<tr><td>${p}</td>${thKeys.map((k) => `<td>${((teamData.products[p][k] || 0) * 100).toFixed(2)}%</td>`).join('')}</tr>`;
+      }
+      html += `</tbody></table>`;
+    }
+  }
+  document.getElementById('previewContent').innerHTML = html;
+}
+
+function downloadSchema() {
+  if (!generatedSchema) return;
+  const blob = new Blob([JSON.stringify(generatedSchema, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'schema.json';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+</script>
+</body>
+</html>

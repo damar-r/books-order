@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kalkulator Incentive Agent</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <h1>🎯 Kalkulator Incentive Agent</h1>
+    <p>Hitung incentive dari revenue kamu, atau cari tahu berapa revenue tambahan yang dibutuhkan untuk capai incentive impianmu.</p>
+    <div class="nav-links"><a href="admin.html">Halaman Admin (update skema)</a></div>
+  </header>
+
+  <div id="loadError" class="alert error" style="display:none;"></div>
+
+  <div class="card" id="setupCard" style="display:none;">
+    <h2>1. Pilih Minggu &amp; Team</h2>
+    <div class="two-col">
+      <div class="field">
+        <label for="weekSelect">ISO Week</label>
+        <select id="weekSelect"></select>
+      </div>
+      <div class="field">
+        <label for="teamSelect">Team</label>
+        <select id="teamSelect"></select>
+      </div>
+    </div>
+    <div class="field">
+      <label for="targetInput">Target Revenue Minggu Ini (Rp)</label>
+      <input type="number" id="targetInput" min="0" step="1" placeholder="mis. 13000000">
+      <div class="hint" id="targetHint"></div>
+    </div>
+  </div>
+
+  <div class="card" id="revenueCard" style="display:none;">
+    <h2>2. Revenue per Produk (saat ini)</h2>
+    <div class="product-grid" id="productGrid"></div>
+    <div class="stat-row" style="margin-top:10px; border-top:1px solid var(--border); padding-top:10px;">
+      <span class="label">Total Revenue</span>
+      <span class="value" id="totalRevenueDisplay">Rp 0</span>
+    </div>
+  </div>
+
+  <div class="card" id="modeCard" style="display:none;">
+    <h2>3. Mau hitung apa?</h2>
+    <div class="field">
+      <label for="modeSelect">Mode</label>
+      <select id="modeSelect">
+        <option value="forward">Incentive saya berapa dari revenue di atas?</option>
+        <option value="reverse">Saya mau incentive sekian, revenue tambahan yang dibutuhkan berapa?</option>
+      </select>
+    </div>
+    <div class="field" id="desiredIncentiveField" style="display:none;">
+      <label for="desiredIncentiveInput">Incentive yang Diinginkan (Rp)</label>
+      <input type="number" id="desiredIncentiveInput" min="0" step="1" placeholder="mis. 2000000">
+    </div>
+    <button class="btn-primary" id="calcBtn">Hitung</button>
+  </div>
+
+  <div id="resultArea"></div>
+
+  <div class="card muted" id="loadingCard">
+    Memuat skema incentive...
+  </div>
+</div>
+
+<script src="js/calc.js"></script>
+<script>
+const state = {
+  schema: null,
+  currentTeamData: null, // { thresholds, products, defaultTarget }
+};
+
+function formatRupiah(n) {
+  const rounded = Math.round(n || 0);
+  return 'Rp ' + rounded.toLocaleString('id-ID');
+}
+
+function formatPercent(n) {
+  return (n * 100).toFixed(1) + '%';
+}
+
+async function loadSchema() {
+  try {
+    const res = await fetch('data/schema.json', { cache: 'no-store' });
+    if (!res.ok) throw new Error('File data/schema.json tidak ditemukan (status ' + res.status + ')');
+    const schema = await res.json();
+    state.schema = schema;
+    initUI();
+  } catch (err) {
+    document.getElementById('loadError').style.display = 'block';
+    document.getElementById('loadError').textContent =
+      'Gagal memuat skema incentive: ' + err.message + '. Pastikan admin sudah upload data/schema.json ke repo.';
+  } finally {
+    document.getElementById('loadingCard').style.display = 'none';
+  }
+}
+
+function initUI() {
+  const weeks = Object.keys(state.schema.weeks).sort((a, b) => Number(a) - Number(b));
+  if (weeks.length === 0) {
+    document.getElementById('loadError').style.display = 'block';
+    document.getElementById('loadError').textContent = 'Skema kosong, belum ada data minggu.';
+    return;
+  }
+  const weekSelect = document.getElementById('weekSelect');
+  weekSelect.innerHTML = weeks.map((w) => `<option value="${w}">Week ${w}</option>`).join('');
+  weekSelect.value = weeks[weeks.length - 1]; // default: minggu terbaru
+
+  document.getElementById('setupCard').style.display = 'block';
+  document.getElementById('modeCard').style.display = 'block';
+
+  weekSelect.addEventListener('change', onWeekOrTeamChange);
+  document.getElementById('teamSelect').addEventListener('change', onWeekOrTeamChange);
+  document.getElementById('modeSelect').addEventListener('change', onModeChange);
+  document.getElementById('calcBtn').addEventListener('click', onCalculate);
+
+  onWeekOrTeamChange();
+}
+
+function onWeekOrTeamChange() {
+  const week = document.getElementById('weekSelect').value;
+  const teams = Object.keys(state.schema.weeks[week].teams);
+  const teamSelect = document.getElementById('teamSelect');
+  const prevTeam = teamSelect.value;
+  teamSelect.innerHTML = teams.map((t) => `<option value="${t}">${t}</option>`).join('');
+  if (teams.includes(prevTeam)) teamSelect.value = prevTeam;
+
+  const team = teamSelect.value;
+  const teamData = state.schema.weeks[week].teams[team];
+  state.currentTeamData = teamData;
+
+  const targetInput = document.getElementById('targetInput');
+  const targetHint = document.getElementById('targetHint');
+  if (teamData.defaultTarget) {
+    if (!targetInput.value || targetInput.dataset.auto === '1') {
+      targetInput.value = teamData.defaultTarget;
+      targetInput.dataset.auto = '1';
+    }
+    targetHint.textContent = `Default dari skema: ${formatRupiah(teamData.defaultTarget)} (bisa diubah manual)`;
+  } else {
+    targetHint.textContent = 'Isi target minggu ini secara manual.';
+  }
+  targetInput.addEventListener('input', () => { targetInput.dataset.auto = '0'; }, { once: true });
+
+  renderProductGrid(teamData);
+  document.getElementById('revenueCard').style.display = 'block';
+}
+
+function renderProductGrid(teamData) {
+  const grid = document.getElementById('productGrid');
+  const products = Object.keys(teamData.products);
+  grid.innerHTML = products.map((p) => `
+    <div class="product-row">
+      <div class="pname">${p}</div>
+      <input type="number" min="0" step="1" placeholder="0" class="rev-input" data-product="${p}">
+    </div>
+  `).join('');
+
+  grid.querySelectorAll('.rev-input').forEach((el) => {
+    el.addEventListener('input', updateTotalRevenue);
+  });
+  updateTotalRevenue();
+}
+
+function getRevenueByProduct() {
+  const inputs = document.querySelectorAll('.rev-input');
+  const revenue = {};
+  inputs.forEach((el) => {
+    revenue[el.dataset.product] = parseFloat(el.value) || 0;
+  });
+  return revenue;
+}
+
+function updateTotalRevenue() {
+  const revenue = getRevenueByProduct();
+  const total = Object.values(revenue).reduce((a, b) => a + b, 0);
+  document.getElementById('totalRevenueDisplay').textContent = formatRupiah(total);
+}
+
+function onModeChange() {
+  const mode = document.getElementById('modeSelect').value;
+  document.getElementById('desiredIncentiveField').style.display = mode === 'reverse' ? 'block' : 'none';
+}
+
+function onCalculate() {
+  const mode = document.getElementById('modeSelect').value;
+  const target = parseFloat(document.getElementById('targetInput').value) || 0;
+  const revenue = getRevenueByProduct();
+  const teamData = state.currentTeamData;
+
+  if (!target || target <= 0) {
+    renderError('Isi target revenue minggu ini terlebih dahulu.');
+    return;
+  }
+
+  if (mode === 'forward') {
+    const result = calculateIncentive({
+      revenueByProduct: revenue,
+      target,
+      thresholds: teamData.thresholds,
+      rates: teamData.products,
+    });
+    renderForwardResult(result);
+  } else {
+    const desiredIncentive = parseFloat(document.getElementById('desiredIncentiveInput').value) || 0;
+    if (!desiredIncentive || desiredIncentive <= 0) {
+      renderError('Isi incentive yang diinginkan terlebih dahulu.');
+      return;
+    }
+    const result = calculateRequiredRevenue({
+      baselineRevenue: revenue,
+      target,
+      desiredIncentive,
+      thresholds: teamData.thresholds,
+      rates: teamData.products,
+    });
+    renderReverseResult(result, desiredIncentive);
+  }
+}
+
+function renderError(msg) {
+  document.getElementById('resultArea').innerHTML = `<div class="card"><div class="result-box danger"><div class="headline">⚠️ ${msg}</div></div></div>`;
+}
+
+function renderForwardResult(result) {
+  const html = `
+    <div class="card">
+      <div class="result-box success">
+        <div class="headline">Estimasi Incentive Kamu: ${formatRupiah(result.incentive)}</div>
+        <div class="stat-row"><span class="label">Total Revenue</span><span class="value">${formatRupiah(result.totalRevenue)}</span></div>
+        <div class="stat-row"><span class="label">Achievement</span><span class="value">${formatPercent(result.achievement)}</span></div>
+        <div class="stat-row"><span class="label">Threshold Tercapai</span><span class="value">${result.activeThreshold.key} (≥ ${formatPercent(result.activeThreshold.cutoff)})</span></div>
+      </div>
+      <table class="preview">
+        <thead><tr><th>Produk</th><th>Revenue</th><th>Rate</th><th>Incentive</th></tr></thead>
+        <tbody>
+          ${Object.entries(result.breakdown)
+            .filter(([, b]) => b.revenue > 0)
+            .map(([p, b]) => `<tr><td>${p}</td><td>${formatRupiah(b.revenue)}</td><td>${(b.rate * 100).toFixed(2)}%</td><td>${formatRupiah(b.incentive)}</td></tr>`)
+            .join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
+  document.getElementById('resultArea').innerHTML = html;
+}
+
+function renderReverseResult(result, desiredIncentive) {
+  if (result.alreadyAchieved) {
+    document.getElementById('resultArea').innerHTML = `
+      <div class="card">
+        <div class="result-box success">
+          <div class="headline">🎉 Sudah tercapai!</div>
+          <div class="stat-row"><span class="label">Incentive saat ini</span><span class="value">${formatRupiah(result.current.incentive)}</span></div>
+          <div class="stat-row"><span class="label">Target incentive</span><span class="value">${formatRupiah(desiredIncentive)}</span></div>
+        </div>
+      </div>`;
+    return;
+  }
+
+  if (!result.recommended) {
+    document.getElementById('resultArea').innerHTML = `
+      <div class="card">
+        <div class="result-box warn">
+          <div class="headline">Belum ketemu kombinasi yang pas</div>
+          <p class="muted">Incentive sebesar ${formatRupiah(desiredIncentive)} sulit dicapai hanya dengan menambah revenue di satu produk pada skema minggu ini. Coba turunkan target incentive atau distribusikan ke beberapa produk.</p>
+        </div>
+      </div>`;
+    return;
+  }
+
+  const rec = result.recommended;
+  const rows = Object.entries(rec.finalRevenueByProduct)
+    .filter(([p, v]) => v > 0 || rec.extraByProduct[p] > 0)
+    .map(([p, finalRev]) => {
+      const extra = rec.extraByProduct[p] || 0;
+      const highlight = extra > 0 ? ' style="font-weight:700;color:var(--primary);"' : '';
+      return `<tr${highlight}><td>${p}</td><td>${formatRupiah(finalRev - extra)}</td><td>${extra > 0 ? '+' + formatRupiah(extra) : '-'}</td><td>${formatRupiah(finalRev)}</td></tr>`;
+    })
+    .join('');
+
+  const altHtml = result.solutions.length > 1
+    ? `<p class="muted">Ada ${result.solutions.length} kombinasi threshold yang mungkin; ditampilkan yang butuh tambahan revenue paling sedikit (${rec.thresholdKey}).</p>`
+    : '';
+
+  document.getElementById('resultArea').innerHTML = `
+    <div class="card">
+      <div class="result-box success">
+        <div class="headline">Tambahan revenue dibutuhkan: ${formatRupiah(rec.extraTotal)}</div>
+        <div class="stat-row"><span class="label">Fokus di produk</span><span class="value">${rec.allocationTarget}</span></div>
+        <div class="stat-row"><span class="label">Threshold akhir</span><span class="value">${rec.thresholdKey} (≥ ${formatPercent(rec.thresholdCutoff)})</span></div>
+        <div class="stat-row"><span class="label">Total revenue akhir</span><span class="value">${formatRupiah(rec.finalTotalRevenue)}</span></div>
+        <div class="stat-row"><span class="label">Achievement akhir</span><span class="value">${formatPercent(rec.finalAchievement)}</span></div>
+      </div>
+      ${altHtml}
+      <table class="preview">
+        <thead><tr><th>Produk</th><th>Revenue Saat Ini</th><th>Tambahan</th><th>Revenue Akhir</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+loadSchema();
+</script>
+</body>
+</html>
