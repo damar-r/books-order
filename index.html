@@ -768,7 +768,11 @@
     var wrap = document.getElementById("data-list");
     document.getElementById("count-data").textContent = state.items.length;
     var q = state.search.trim().toLowerCase();
-    var items = state.items.slice().sort(function(a,b){ return (b.createdAt||0) - (a.createdAt||0); });
+    var items = state.items.slice().sort(function(a,b){
+      var ka = a.expectedMonth || "9999-99", kb = b.expectedMonth || "9999-99";
+      if(ka !== kb) return ka < kb ? -1 : 1;
+      return (a.createdAt||0) - (b.createdAt||0);
+    });
     if(q){
       items = items.filter(function(it){
         return (it.title||"").toLowerCase().indexOf(q) > -1 || (it.seller||"").toLowerCase().indexOf(q) > -1;
