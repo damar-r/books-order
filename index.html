@@ -475,6 +475,21 @@
     if(!m || m < 1 || m > 12) return key;
     return MONTHS_ID[m-1] + " " + y;
   }
+  function etaMonth(it){
+    var m = it.expectedMonth || (it.expectedDate ? it.expectedDate.slice(0,7) : "");
+    return m && m !== "0000-00" ? m : "";
+  }
+  function etaKey(it){
+    return etaMonth(it) || "9999-99";
+  }
+  function formatEta(it){
+    return formatMonthKey(etaMonth(it));
+  }
+  function cmpEta(a,b){
+    var ka = etaKey(a), kb = etaKey(b);
+    if(ka !== kb) return ka < kb ? -1 : 1;
+    return (a.createdAt||0) - (b.createdAt||0);
+  }
   function totalCost(it){
     return Number(it.price||0) + Number(it.adminFee||0) + Number(it.shippingFee||0);
   }
@@ -677,7 +692,7 @@
     }
     var byMonth = {};
     pending.forEach(function(it){
-      var key = it.expectedMonth || "0000-00";
+      var key = etaMonth(it) || "0000-00";
       if(!byMonth[key]) byMonth[key] = [];
       byMonth[key].push(it);
     });
@@ -688,7 +703,7 @@
     });
     var html = "";
     keys.forEach(function(key){
-      var items = byMonth[key].sort(function(a,b){ return (a.createdAt||0) - (b.createdAt||0); });
+      var items = byMonth[key].sort(cmpEta);
       var totalTagihan = items.reduce(function(sum,it){ return sum + remaining(it); }, 0);
       var open = !!state.expandedMonths[key];
       html += '<div class="card month-card' + (open?" open":"") + '" data-month="' + escapeHtml(key) + '" style="margin-bottom:10px;">';
@@ -702,7 +717,7 @@
         var meta = STATUS_META[it.status] || STATUS_META.ngelist;
         html += '<div class="item-row" data-id="' + it.id + '">';
         html += '<div class="item-top"><div><div class="item-title">' + escapeHtml(it.title) + '</div>';
-        html += '<div class="item-seller">' + escapeHtml(it.seller) + '</div></div>';
+        html += '<div class="item-seller">' + escapeHtml(it.seller) + ' &middot; ETA ' + escapeHtml(formatEta(it)) + '</div></div>';
         html += '<div style="display:flex; flex-direction:column; gap:4px; align-items:flex-end;">';
         html += '<span class="chip ' + meta.group + '">' + meta.label + '</span>';
         if(it.isArrived) html += '<span class="chip arrived">Sudah Datang</span>';
@@ -753,7 +768,7 @@
       html += '<div class="po-main"><div class="po-title">' + escapeHtml(it.title) + '</div>';
       html += '<div class="po-meta"><span class="seller">' + escapeHtml(it.seller) + '</span>';
       html += '<span class="chip ' + meta.group + '">' + meta.label + '</span>';
-      html += '<span class="chip outline">Est. ' + escapeHtml(formatMonthKey(it.expectedMonth)) + '</span></div></div>';
+      html += '<span class="chip outline">ETA ' + escapeHtml(formatEta(it)) + '</span></div></div>';
       html += '<div class="po-side"><div class="po-remaining' + (rem===0?" zero":"") + ' num">' + (rem===0 ? "LUNAS" : "Sisa Rp " + formatCurrency(rem)) + '</div>';
       html += '<div class="row-actions">';
       if(it.status !== "lunas") html += '<button class="btn btn-sm btn-ghost act-lunas" data-id="' + it.id + '">Tandai Lunas</button>';
@@ -769,9 +784,8 @@
     document.getElementById("count-data").textContent = state.items.length;
     var q = state.search.trim().toLowerCase();
     var items = state.items.slice().sort(function(a,b){
-      var ka = a.expectedMonth || "9999-99", kb = b.expectedMonth || "9999-99";
-      if(ka !== kb) return ka < kb ? -1 : 1;
-      return (a.createdAt||0) - (b.createdAt||0);
+      if(!!a.isArrived !== !!b.isArrived) return a.isArrived ? 1 : -1;
+      return cmpEta(a,b);
     });
     if(q){
       items = items.filter(function(it){
@@ -791,6 +805,7 @@
       html += '<div class="po-main"><div class="po-title">' + escapeHtml(it.title) + '</div>';
       html += '<div class="po-meta"><span class="seller">' + escapeHtml(it.seller) + '</span>';
       html += '<span class="chip ' + meta.group + '">' + meta.label + '</span>';
+      html += '<span class="chip outline">ETA ' + escapeHtml(formatEta(it)) + '</span>';
       if(it.isArrived) html += '<span class="chip arrived">Datang</span>';
       html += '</div></div>';
       html += '<div class="po-side"><div class="po-remaining' + (rem===0?" zero":"") + ' num">' + (rem===0 ? "LUNAS" : "Rp " + formatCurrency(rem)) + '</div>';
@@ -855,7 +870,7 @@
   function sellerItemRow(it){
     var rem = remaining(it);
     return '<div class="seller-item"><div><div class="t">' + escapeHtml(it.title) + '</div>' +
-      '<div class="m">Est. ' + escapeHtml(formatMonthKey(it.expectedMonth)) + ' &middot; ' + escapeHtml(it.category) + '</div></div>' +
+      '<div class="m">ETA ' + escapeHtml(formatEta(it)) + ' &middot; ' + escapeHtml(it.category) + '</div></div>' +
       '<div class="num" style="white-space:nowrap;">' + (rem===0 ? "LUNAS" : "Rp " + formatCurrency(rem)) + '</div></div>';
   }
 
@@ -921,7 +936,7 @@
     document.getElementById("form-submit").textContent = it ? "Simpan Perubahan" : "Simpan Data PO";
     document.getElementById("f-title").value = it ? it.title : "";
     document.getElementById("f-category").value = it ? it.category : "Buku";
-    document.getElementById("f-month").value = it ? it.expectedMonth : defaultMonth();
+    document.getElementById("f-month").value = it ? etaMonth(it) : defaultMonth();
     document.getElementById("f-seller").value = it ? it.seller : "";
     document.getElementById("f-price").value = it ? it.price : "";
     document.getElementById("f-admin").value = it ? (it.adminFee||0) : 0;
@@ -932,6 +947,10 @@
     document.getElementById("f-arrived").checked = it ? !!it.isArrived : false;
     toggleDpField();
     formOverlay.hidden = false;
+  }
+  function defaultDate(){
+    var d = new Date();
+    return d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0") + "-" + String(d.getDate()).padStart(2,"0");
   }
   function defaultMonth(){
     var d = new Date();
@@ -1072,7 +1091,7 @@
           "Status": meta.label,
           "DP Dibayar": dpPaid(it),
           "Sisa Tagihan": remaining(it),
-          "Estimasi Datang": formatMonthKey(it.expectedMonth),
+          "Estimasi Datang": formatEta(it),
           "Sudah Datang": it.isArrived ? "Ya" : "Belum",
           "Keterangan": it.notes || ""
         };
